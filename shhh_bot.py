@@ -8,6 +8,8 @@ import random
 import datetime
 import string
 import asyncio
+from telegram.ext import ConversationHandler
+
 ADMIN_ID = 272340476  # ← твой Telegram ID
 
 def generate_discount_code():
@@ -40,6 +42,7 @@ CATEGORY_STRUCTURE = {
 category_map = {}
 offers_list = []
 
+
 def load_yml():
     global category_map, offers_list
     try:
@@ -52,6 +55,9 @@ def load_yml():
             cat_id = cat.attrib.get("id")
             name = cat.text.strip().lower()
             category_map[cat_id] = [x.strip() for x in name.split(";")]
+            # 🧃 Хардкодим категорию для попперсов (если что-то пошло не так)
+            if cat_id == "285205905532":
+                category_map[cat_id] = ["попперсы", "средства"]
     except Exception as e:
         logger.error(f"Ошибка загрузки YML: {e}")
         category_map.clear()
@@ -71,7 +77,7 @@ def get_matching_offers(subcategory):
 
     # Привязка "без вибрации" к плагам
     if subcategory == "без вибрации":
-        subcategory = "плаги"  # Меняем подкатегорию на плаги
+        subcategory = "плаги"  # Меняем подкатегорию на плаг
 
     # Привязка "Тренажеры для него" и "Тренажеры для нее"
     if subcategory == "тренажеры для него":
@@ -90,26 +96,91 @@ def get_matching_offers(subcategory):
             continue
         offer_cats = category_map[cat_id]
         if subcategory in offer_cats:
-            matched.append(offer)
+            # Добавляем проверку, чтобы использовать только товары из YML
+            if offer.findtext("url") is not None:  # Проверяем, что товар есть в YML
+                matched.append(offer)
+    
     return matched
 
+
 async def start(update: Update, context: CallbackContext) -> None:
-    keyboard = [[InlineKeyboardButton(cat, callback_data=f"main_{cat}")] for cat in CATEGORY_STRUCTURE]
-    markup = InlineKeyboardMarkup(keyboard)
+    if "gender" not in context.user_data:
+        keyboard = [
+            [InlineKeyboardButton("👦 Мальчик", callback_data="gender_boy")],
+            [InlineKeyboardButton("👧 Девочка", callback_data="gender_girl")],
+            [InlineKeyboardButton("🚁 Боевой вертолет", callback_data="gender_heli")]
+        ]
+        start_kb = ReplyKeyboardMarkup([[KeyboardButton("🟢 Старт")]], resize_keyboard=True)
+        await update.message.reply_text(
+            "Выбери, кто ты сегодня 😏",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    gender = context.user_data.get("gender", "boy")
+    if gender == "girl":
+        nickname = "киска"
+    elif gender == "heli":
+        nickname = "вертолётик"
+    else:
+        nickname = "котик"
+
+    start_kb = ReplyKeyboardMarkup(
+            [[KeyboardButton("🟢 Старт")]],
+        resize_keyboard=True
+    )
     reply_kb = ReplyKeyboardMarkup(
-    [[KeyboardButton("🏠 Меню"), KeyboardButton("📲 Написать нам")],
-     [KeyboardButton("🌐 Перейти на сайт"), KeyboardButton("ℹ️ О нас"), KeyboardButton("📞 Наши контакты")],
-     [KeyboardButton("🎲 Мне повезёт!")],
-     [KeyboardButton("📚 Истории от подписчиков")]],
-    resize_keyboard=True
-)
+        [
+            [KeyboardButton("🏠 Меню"), KeyboardButton("📲 Написать нам")],
+            [KeyboardButton("🌐 Перейти на сайт"), KeyboardButton("ℹ️ О нас"), KeyboardButton("📞 Наши контакты")],
+            [KeyboardButton("🎲 Мне повезёт!"), KeyboardButton("📚 Истории от подписчиков")]
+        ],
+        resize_keyboard=True
+    )
 
 
     if update.message:
-        await update.message.reply_text("Привет! Выбери категорию 🍑", reply_markup=markup)
-        await update.message.reply_text("👇", reply_markup=reply_kb)
+        await update.message.reply_text(
+            f"Привет, {nickname} 😘 Я помогу тебе выбрать что-то интересное... Вот что у нас есть:",
+            reply_markup=reply_kb
+        )
+        keyboard = [[InlineKeyboardButton(cat, callback_data=f"main_{cat}")] for cat in CATEGORY_STRUCTURE]
+        markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("🍑 Выбери категорию 🍑", reply_markup=markup)
     elif update.callback_query:
-        await update.callback_query.message.edit_text("Привет! Выбери категорию 🍑", reply_markup=markup)
+        await update.callback_query.message.reply_text(
+            f"Привет, {nickname} 😘 Я помогу тебе выбрать что-то интересное... Вот что у нас есть:",
+            reply_markup=reply_kb
+        )
+        keyboard = [[InlineKeyboardButton(cat, callback_data=f"main_{cat}")] for cat in CATEGORY_STRUCTURE]
+        markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.message.reply_text("🍑 Выбери категорию 🍑", reply_markup=markup)
+
+
+async def gender_callback(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    choice = query.data.replace("gender_", "")
+    context.user_data["gender"] = choice
+
+    if choice == "boy":
+        msg = "👦 Привет, котик 😘 Готов к приключениям?"
+    elif choice == "girl":
+        msg = "👧 Привет, киска 😘 Сейчас мы подберём тебе что-то потрясающее..."
+    else:
+        msg = "🚁 Привет, боевой вертолёт! Готов к возбуждающему рейду? 🔥"
+
+    # 👉 СРАЗУ ПОКАЗЫВАЕМ МЕНЮ
+    await start(update, context)
+
+def get_user_nickname(context: CallbackContext) -> str:
+    gender = context.user_data.get("gender", "boy")
+    if gender == "girl":
+        return "киска"
+    elif gender == "heli":
+        return "вертолётик"
+    return "котик"
 
 async def show_subcategories(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -363,9 +434,10 @@ async def show_details(update: Update, context: CallbackContext) -> None:
             break
 
     # Если вдруг не нашли
-    if not offer:
+    if offer is None:
         await query.message.reply_text("Упс, описание не найдено 🙈")
         return
+
 
     # Берём полное описание из поля <description>
     desc = offer.findtext("description", "Описание отсутствует")
@@ -404,41 +476,116 @@ async def story_command(update: Update, context: CallbackContext) -> None:
     if not stories:
         await update.message.reply_text("Ой, похоже, истории пока сбежали! 🙈")
         return
-    story = random.choice(stories)
-    await update.message.reply_text(f"{story}")
+
+    used = context.user_data.get("used_stories", set())
+
+    # Выбираем только те, что ещё не показывались
+    unused_stories = [s for i, s in enumerate(stories) if i not in used]
+
+    if not unused_stories:
+        context.user_data["used_stories"] = set()
+        nickname = get_user_nickname(context)
+        await update.message.reply_text(f"{nickname}, ты уже прочитал(а) все истории 😘 Обновляем список...")
+        unused_stories = stories.copy()
+
+    # Случайно выбираем одну из неиспользованных
+    chosen_story = random.choice(unused_stories)
+    index = stories.index(chosen_story)
+    context.user_data.setdefault("used_stories", set()).add(index)
+
+    await update.message.reply_text(f"{chosen_story}")
+
+async def fallback_to_support(update: Update, context: CallbackContext):
+    txt = update.message.text.lower()
+
+    if any(keyword in txt for keyword in ["меню", "написать", "сайт"]):
+        return  # Уже обрабатывается в основной логике
+
+    await update.message.reply_text(
+        "🔔 Кажется, ты хочешь что-то обсудить... \n"
+        "Выбери, с кем ты хочешь пообщаться 😘",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👠 Продавщица Полина", url="https://t.me/+77772992962")],
+            [InlineKeyboardButton("🖤 Госпожа Виктория", url="https://t.me/+77472992962")],
+            [InlineKeyboardButton("🧠 Профессор", url="https://t.me/+77011001650")]
+        ])
+    )
 
 async def text_handler(update: Update, context: CallbackContext) -> None:
     txt = update.message.text.lower()
 
-    if "меню" in txt:
+    if "подарки" in txt or "товары" in txt or "купить" in txt:
+        matched_offers = get_matching_offers(txt)
+
+        if matched_offers:
+            for offer in matched_offers:
+                name = offer.findtext("name", "Без названия")
+                price = offer.findtext("price", "Не указана")
+                url = offer.findtext("url", "https://shhh.kz")
+                description = offer.findtext("description", "Описание отсутствует")
+
+                await update.message.reply_text(
+                    f"🔥 <b>{name}</b>\n💸 Цена: {price} KZT\n\n{description}\n\n🔗 <a href='{url}'>Перейти к товару</a>",
+                    parse_mode="HTML"
+                )
+        else:
+            await update.message.reply_text("Извините, товаров по вашему запросу не найдено 😔")
+
+    elif "старт" in txt:
+        await start(update, context)
+
+    elif "меню" in txt:
         keyboard = [[InlineKeyboardButton(cat, callback_data=f"main_{cat}")] for cat in CATEGORY_STRUCTURE]
         markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Привет! Вот категории 😘", reply_markup=markup)
+        nickname = get_user_nickname(context)
+        await update.message.reply_text(
+            f"Привет, {nickname}! Вот категории 😘",
+            reply_markup=markup
+        )
 
-    elif "написать" in txt:
-        await update.message.reply_text("📲 Выбери Telegram-номер:", reply_markup=InlineKeyboardMarkup([ 
-            [InlineKeyboardButton("+77772992962", url="https://t.me/+77772992962")],
-            [InlineKeyboardButton("+77472992962", url="https://t.me/+77472992962")],
-            [InlineKeyboardButton("+77011001650", url="https://t.me/+77011001650")]
-        ]))
+
 
     elif "сайт" in txt:
-        await update.message.reply_text("💻 Наш сайт:", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Перейти на сайт", url="https://shhh.kz")]
-        ]))
+        await update.message.reply_text(
+            "💻 Наш сайт:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌐 Перейти на сайт", url="https://shhh.kz")]
+            ])
+        )
+
+    elif "написать" in txt:
+        gender = context.user_data.get("gender", "boy")
+        nickname = get_user_nickname(context)
+
+        if gender == "heli":
+            text = f"💌 Цель захвачена! С кем податься в диалог, {nickname}? 🚁"
+        elif gender == "girl":
+            text = f"💌 С кем бы ты хотела пообщаться, {nickname}? 😘"
+        else:
+            text = f"💌 С кем бы ты хотел пообщаться, {nickname}? 😘"
+
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👠 Продавщица", url="https://t.me/+77772992962")],
+                [InlineKeyboardButton("🖤 Ассистентка", url="https://t.me/+77472992962")],
+                [InlineKeyboardButton("🧠 Профессор", url="https://t.me/+77011001650")]
+            ])
+        )
+
 
     elif "контакт" in txt:
         await update.message.reply_text(
-        "<b>📞 Телефон / WhatsApp / Telegram:</b>\n"
-        "+77772992962\n"
-        "+77472992962\n\n"
-        "<b>📸 Instagram:</b> <a href='https://www.instagram.com/shhhshopkz/?igsh=ZjYxc2hjaDI4MTI4#'>@shhhshopkz</a>\n"
-        "<b>🎵 TikTok:</b> <a href='https://www.tiktok.com/@shhh.kz?_t=ZM-8uBBZXV9OK5&_r=1'>@shhh.kz</a>\n"
-        "<b>🌐 Сайт:</b> <a href='https://shhh.kz/'>shhh.kz</a>\n\n"
-        "<b>📍 Адрес:</b> <a href='https://go.2gis.com/HsMDg'>Жамбыла 180е, Алматы</a>\n"
-        "🕙 10:00–22:00 ежедневно",
-        parse_mode="HTML"
-    )
+            "<b>📞 Телефон / WhatsApp / Telegram:</b>\n"
+            "+77772992962\n"
+            "+77472992962\n\n"
+            "<b>📸 Instagram:</b> <a href='https://www.instagram.com/shhhshopkz/?igsh=ZjYxc2hjaDI4MTI4#'>@shhhshopkz</a>\n"
+            "<b>🎵 TikTok:</b> <a href='https://www.tiktok.com/@shhh.kz?_t=ZM-8uBBZXV9OK5&_r=1'>@shhh.kz</a>\n"
+            "<b>🌐 Сайт:</b> <a href='https://shhh.kz/'>shhh.kz</a>\n\n"
+            "<b>📍 Адрес:</b> <a href='https://go.2gis.com/HsMDg'>Жамбыла 180е, Алматы</a>\n"
+            "🕙 10:00–22:00 ежедневно",
+            parse_mode="HTML"
+        )
 
     elif "истории" in txt:
         stories = load_stories()
@@ -448,10 +595,8 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
             story = random.choice(stories)
             await update.message.reply_text(f"{story}")
 
-
     elif "о нас" in txt:
         await update.message.reply_text("Мы не просто интим-магазин… мы воплощение ваших желаний 😘")
-
 
     elif "мне повезёт" in txt:
         now = datetime.datetime.now()
@@ -464,8 +609,9 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
                 minutes = int(remaining // 60)
                 seconds = int(remaining % 60)
 
+                nickname = get_user_nickname(context)
                 await update.message.reply_text(
-                    f"⏳ Подожди, сладкий, предыдущая скидка ещё действует!\n"
+                    f"⏳ Подожди, {nickname}, предыдущая скидка ещё действует!\n"
                     f"⏱ Осталось {minutes} мин {seconds} сек 😘"
                 )
                 return
@@ -511,7 +657,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
                 parse_mode="HTML"
             )
 
-                # 🔔 Отправляем уведомление тебе лично
+        # 🔔 Отправляем уведомление тебе лично
         notification = (
             f"📢 <b>Выдана новая скидка!</b>\n\n"
             f"🔑 Код: <code>{discount_code}</code>\n"
@@ -534,19 +680,38 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
 
         asyncio.create_task(discount_timer(context, update.message.chat_id, discount_code))
 
+    else:
+        nickname = get_user_nickname(context)
+        await update.message.reply_text(
+            f"🔔 Кажется, {nickname}, ты хочешь что-то обсудить.\n"
+            f"Выбери, с кем пофлиртовать 😘",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👠 Продавщица", url="https://t.me/+77772992962")],
+                [InlineKeyboardButton("🖤 Ассистентка", url="https://t.me/+77472992962")],
+                [InlineKeyboardButton("🧠 Профессор", url="https://t.me/+77011001650")]
+            ])
+        )
+
+
 def main():
     load_yml()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    # 👠 Хэндлеры по порядку
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CommandHandler("story", story_command))
+    app.add_handler(CallbackQueryHandler(gender_callback, pattern="^gender_"))
     app.add_handler(CallbackQueryHandler(start, pattern="^start$"))
     app.add_handler(CallbackQueryHandler(show_subcategories, pattern="^main_.*"))
     app.add_handler(CallbackQueryHandler(show_products, pattern="^sub_.*_.*"))
-    app.add_handler(CallbackQueryHandler(show_all_products, pattern="^load_all$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(CallbackQueryHandler(load_more, pattern="^load_more$"))
+    app.add_handler(CallbackQueryHandler(show_all_products, pattern="^load_all$"))
     app.add_handler(CallbackQueryHandler(show_details, pattern="^details_.*"))
+
+    # 🔥 Основной обработчик текстов (твои условия: "меню", "написать", "сайт")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
     logger.info("Бот запущен 🎉")
     app.run_polling()
 
