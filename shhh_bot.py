@@ -8,9 +8,13 @@ import random
 import datetime
 import string
 import asyncio
+import matplotlib.pyplot as plt
 from telegram.ext import ConversationHandler
+import csv
+from datetime import datetime
 
 ADMIN_ID = 272340476  # ← твой Telegram ID
+user_18_confirmed = set()  # ← добавь сюда
 
 def generate_discount_code():
     date_part = datetime.datetime.now().strftime("%d%m%y")
@@ -104,18 +108,40 @@ def get_matching_offers(subcategory):
 
 
 async def start(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+
+    # Если пользователь не подтвердил возраст — сначала проверка 18+
+    if user_id not in user_18_confirmed:
+        keyboard = [
+            [
+                InlineKeyboardButton("🔞 Да, мне есть 18", callback_data="age_yes"),
+                InlineKeyboardButton("❌ Нет, мне нет 18", callback_data="age_no"),
+            ]
+        ]
+        markup = InlineKeyboardMarkup(keyboard)
+
+        if update.message:
+            await update.message.reply_text("Этот бот только для взрослых (18+). Подтверди возраст:", reply_markup=markup)
+        elif update.callback_query:
+            await update.callback_query.message.reply_text("Этот бот только для взрослых (18+). Подтверди возраст:", reply_markup=markup)
+        return  # ← ОЧЕНЬ ВАЖНО! Останавливаем здесь, пока не подтвердит возраст
+
+    # Если возраст подтверждён, но пол ещё не выбран — спрашиваем пол
     if "gender" not in context.user_data:
         keyboard = [
             [InlineKeyboardButton("👦 Мальчик", callback_data="gender_boy")],
             [InlineKeyboardButton("👧 Девочка", callback_data="gender_girl")],
             [InlineKeyboardButton("🚁 Боевой вертолет", callback_data="gender_heli")]
         ]
-        start_kb = ReplyKeyboardMarkup([[KeyboardButton("🟢 Старт")]], resize_keyboard=True)
         await update.message.reply_text(
             "Выбери, кто ты сегодня 😏",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
+
+    # Всё подтверждено — можно сразу в меню
+    await gender_callback(update, context)
+
 
     gender = context.user_data.get("gender", "boy")
     if gender == "girl":
@@ -125,10 +151,6 @@ async def start(update: Update, context: CallbackContext) -> None:
     else:
         nickname = "котик"
 
-    start_kb = ReplyKeyboardMarkup(
-            [[KeyboardButton("🟢 Старт")]],
-        resize_keyboard=True
-    )
     reply_kb = ReplyKeyboardMarkup(
         [
             [KeyboardButton("🏠 Меню"), KeyboardButton("📲 Написать нам")],
@@ -137,7 +159,6 @@ async def start(update: Update, context: CallbackContext) -> None:
         ],
         resize_keyboard=True
     )
-
 
     if update.message:
         await update.message.reply_text(
@@ -157,22 +178,37 @@ async def start(update: Update, context: CallbackContext) -> None:
         await update.callback_query.message.reply_text("🍑 Выбери категорию 🍑", reply_markup=markup)
 
 
+
 async def gender_callback(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
 
     choice = query.data.replace("gender_", "")
+    log_action(update.effective_user, f"выбрал пол: {choice}")
     context.user_data["gender"] = choice
 
-    if choice == "boy":
-        msg = "👦 Привет, котик 😘 Готов к приключениям?"
-    elif choice == "girl":
-        msg = "👧 Привет, киска 😘 Сейчас мы подберём тебе что-то потрясающее..."
-    else:
-        msg = "🚁 Привет, боевой вертолёт! Готов к возбуждающему рейду? 🔥"
+    nickname = get_user_nickname(context)
 
-    # 👉 СРАЗУ ПОКАЗЫВАЕМ МЕНЮ
-    await start(update, context)
+    # Показываем меню
+    reply_kb = ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🏠 Меню"), KeyboardButton("📲 Написать нам")],
+            [KeyboardButton("🌐 Перейти на сайт"), KeyboardButton("ℹ️ О нас"), KeyboardButton("📞 Наши контакты")],
+            [KeyboardButton("🎲 Мне повезёт!"), KeyboardButton("📚 Истории от подписчиков")]
+        ],
+        resize_keyboard=True
+    )
+
+    await query.message.reply_text(
+        f"Вот что у нас есть, {nickname} 🍑",
+        reply_markup=reply_kb
+    )
+
+    keyboard = [[InlineKeyboardButton(cat, callback_data=f"main_{cat}")] for cat in CATEGORY_STRUCTURE]
+    markup = InlineKeyboardMarkup(keyboard)
+    await query.message.reply_text("Выбери категорию", reply_markup=markup)
+
+
 
 def get_user_nickname(context: CallbackContext) -> str:
     gender = context.user_data.get("gender", "boy")
@@ -186,6 +222,7 @@ async def show_subcategories(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     await query.answer()
     main_cat = query.data.split("_", 1)[1]
+    log_action(update.effective_user, f"открыл категорию: {main_cat}")
     subcats = CATEGORY_STRUCTURE.get(main_cat, [])
 
     # 🎁 Если категория "Подарки", сразу показываем товары
@@ -235,6 +272,8 @@ async def show_products(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     await query.answer()
     _, main_cat, sub_cat = query.data.split("_", 2)
+    log_action(update.effective_user, f"открыл подкатегорию: {sub_cat}")
+
 
     # Если категория "Подарки" (нет подкатегорий)
     if main_cat == "Подарки":
@@ -469,10 +508,46 @@ async def show_details(update: Update, context: CallbackContext) -> None:
         # отправим новое сообщение
         await query.message.reply_text(f"Ошибка редактирования: {e}")
 
+async def handle_start_button(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    log_action(update.effective_user, "нажал кнопку 🟢 Старт")
+
+    if user_id not in user_18_confirmed:
+        keyboard = [
+            [
+                InlineKeyboardButton("🔞 Да, мне есть 18", callback_data="age_yes"),
+                InlineKeyboardButton("❌ Нет, мне нет 18", callback_data="age_no"),
+            ]
+        ]
+        markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Этот бот только для взрослых (18+). Подтверди возраст:", reply_markup=markup)
+        return
+
+    # если уже подтвержден 18+ — сразу к полу
+    await ask_gender(update, context)
+    
+async def ask_gender(update: Update, context: CallbackContext):
+    keyboard = [
+        [InlineKeyboardButton("👦 Мальчик", callback_data="gender_boy")],
+        [InlineKeyboardButton("👧 Девочка", callback_data="gender_girl")],
+        [InlineKeyboardButton("🚁 Боевой вертолет", callback_data="gender_heli")]
+    ]
+
+    if update.message:
+        await update.message.reply_text(
+            "Выбери, кто ты сегодня 😏",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            "Выбери, кто ты сегодня 😏",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
         
 async def story_command(update: Update, context: CallbackContext) -> None:
     stories = load_stories()
+    log_action(update.effective_user, "открыл 📚 Истории от подписчиков")
     if not stories:
         await update.message.reply_text("Ой, похоже, истории пока сбежали! 🙈")
         return
@@ -535,6 +610,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
         await start(update, context)
 
     elif "меню" in txt:
+        log_action(update.effective_user, "нажал 🏠 Меню")
         keyboard = [[InlineKeyboardButton(cat, callback_data=f"main_{cat}")] for cat in CATEGORY_STRUCTURE]
         markup = InlineKeyboardMarkup(keyboard)
         nickname = get_user_nickname(context)
@@ -546,6 +622,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
 
 
     elif "сайт" in txt:
+        log_action(update.effective_user, "нажал 🌐 Перейти на сайт")
         await update.message.reply_text(
             "💻 Наш сайт:",
             reply_markup=InlineKeyboardMarkup([
@@ -555,6 +632,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
 
     elif "написать" in txt:
         gender = context.user_data.get("gender", "boy")
+        log_action(update.effective_user, "нажал 📲 Написать нам")
         nickname = get_user_nickname(context)
 
         if gender == "heli":
@@ -575,6 +653,8 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
 
 
     elif "контакт" in txt:
+        log_action(update.effective_user, "нажал 📞 Наши контакты")
+
         await update.message.reply_text(
             "<b>📞 Телефон / WhatsApp / Telegram:</b>\n"
             "+77772992962\n"
@@ -586,6 +666,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
             "🕙 10:00–22:00 ежедневно",
             parse_mode="HTML"
         )
+
 
     elif "истории" in txt:
         stories = load_stories()
@@ -600,6 +681,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
 
     elif "мне повезёт" in txt:
         now = datetime.datetime.now()
+        log_action(update.effective_user, "нажал 🎲 Мне повезёт")
         last_used_time = context.user_data.get("last_used_time")
 
         if last_used_time:
@@ -692,6 +774,109 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
             ])
         )
 
+async def age_verification_callback(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "age_yes":
+        user_18_confirmed.add(user_id)
+        log_action(update.effective_user, "подтвердил возраст 18+")
+        await ask_gender(query, context)
+    else:
+        await query.edit_message_text("Ой... тогда тебе сюда пока нельзя 🙈 Возвращайся, когда созреешь 🍑")
+
+def log_action(user, action):
+    with open("analytics.csv", "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            user.id,
+            user.username or "без username",
+            action
+        ])
+
+async def show_analytics(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔️ Только для тебя, мой повелитель 😘")
+        return
+
+    try:
+        from collections import Counter
+        import datetime
+
+        actions = []
+        today_actions = []
+
+        with open("analytics.csv", "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) >= 4:
+                    actions.append(row)
+                    try:
+                        dt = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                        if dt.date() == datetime.datetime.now().date():
+                            today_actions.append(row)
+                    except:
+                        pass
+
+        # 📊 Сначала шлём график
+        generate_activity_graph()
+        with open("graph.png", "rb") as photo:
+            await update.message.reply_photo(photo, caption="📊 График активности по часам")
+
+        # 💦 Потом — общая статистика
+        total = len(actions)
+        all_counter = Counter([a[3] for a in actions])
+        today_counter = Counter([a[3] for a in today_actions])
+
+        report = f"<b>💦 Всего впрысков: {total}</b>\n\n"
+
+        report += "🏆 <b>Топ действий за всё время:</b>\n"
+        for action, num in all_counter.most_common(10):
+            report += f"👉 {action}: {num}\n"
+
+        report += "\n📅 <b>Сегодняшняя активность:</b>\n"
+        for action, num in today_counter.most_common(10):
+            report += f"🔸 {action}: {num}\n"
+
+        await update.message.reply_text(report, parse_mode="HTML")
+
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка в аналитике: {e}")
+
+
+def generate_activity_graph(file="analytics.csv", output="graph.png"):
+    import matplotlib.pyplot as plt
+    from collections import Counter
+    import datetime
+
+    hours = []
+
+    with open(file, "r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) >= 1:
+                try:
+                    dt = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                    hours.append(dt.hour)
+                except:
+                    continue
+
+    counter = Counter(hours)
+    hours_sorted = sorted(counter.items())
+
+    x = [f"{hour}:00" for hour, _ in hours_sorted]
+    y = [count for _, count in hours_sorted]
+
+    plt.figure(figsize=(10, 5))
+    plt.bar(x, y)
+    plt.xlabel("Часы")
+    plt.ylabel("Количество действий")
+    plt.title("Активность по часам")
+    plt.tight_layout()
+    plt.savefig(output)
+    plt.close()
 
 def main():
     load_yml()
@@ -702,12 +887,15 @@ def main():
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CommandHandler("story", story_command))
     app.add_handler(CallbackQueryHandler(gender_callback, pattern="^gender_"))
+    app.add_handler(CallbackQueryHandler(age_verification_callback, pattern="^age_"))
     app.add_handler(CallbackQueryHandler(start, pattern="^start$"))
     app.add_handler(CallbackQueryHandler(show_subcategories, pattern="^main_.*"))
     app.add_handler(CallbackQueryHandler(show_products, pattern="^sub_.*_.*"))
     app.add_handler(CallbackQueryHandler(load_more, pattern="^load_more$"))
     app.add_handler(CallbackQueryHandler(show_all_products, pattern="^load_all$"))
     app.add_handler(CallbackQueryHandler(show_details, pattern="^details_.*"))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🟢 Старт$"), handle_start_button))
+    app.add_handler(CommandHandler("stats", show_analytics))
 
     # 🔥 Основной обработчик текстов (твои условия: "меню", "написать", "сайт")
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
