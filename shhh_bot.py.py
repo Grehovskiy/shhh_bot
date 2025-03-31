@@ -17,7 +17,7 @@ ADMIN_ID = 272340476  # ← твой Telegram ID
 user_18_confirmed = set()  # ← добавь сюда
 
 def generate_discount_code():
-    date_part = datetime.datetime.now().strftime("%d%m%y")
+    date_part = datetime.now().strftime("%d%m%y")
     random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
     return f"{date_part}-{random_part}"
 
@@ -680,7 +680,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Мы не просто интим-магазин… мы воплощение ваших желаний 😘")
 
     elif "мне повезёт" in txt:
-        now = datetime.datetime.now()
+        now = datetime.now()
         log_action(update.effective_user, "нажал 🎲 Мне повезёт")
         last_used_time = context.user_data.get("last_used_time")
 
