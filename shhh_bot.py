@@ -181,6 +181,9 @@ async def start(update: Update, context: CallbackContext) -> None:
 
 async def gender_callback(update: Update, context: CallbackContext):
     query = update.callback_query
+    if query is None:
+        # Если query отсутствует, значит callback_query не было, возвращаемся
+        return
     await query.answer()
 
     choice = query.data.replace("gender_", "")
@@ -807,30 +810,41 @@ async def show_analytics(update: Update, context: CallbackContext):
 
         actions = []
         today_actions = []
+        users_all = set()
+        users_today = set()
 
         with open("analytics.csv", "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) >= 4:
                     actions.append(row)
+                    user_id = row[1]
+                    users_all.add(user_id)
                     try:
                         dt = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
                         if dt.date() == datetime.datetime.now().date():
                             today_actions.append(row)
+                            users_today.add(user_id)
                     except:
                         pass
 
-        # 📊 Сначала шлём график
+        # 📊 График активности
         generate_activity_graph()
         with open("graph.png", "rb") as photo:
             await update.message.reply_photo(photo, caption="📊 График активности по часам")
 
-        # 💦 Потом — общая статистика
+        # 💦 Основная статистика
         total = len(actions)
         all_counter = Counter([a[3] for a in actions])
         today_counter = Counter([a[3] for a in today_actions])
 
-        report = f"<b>💦 Всего впрысков: {total}</b>\n\n"
+        report = (
+            "👥 <b>Уникальные пользователи:</b>\n"
+            f"🗓 Сегодня: <b>{len(users_today)}</b>\n"
+            f"📅 Всего за всё время: <b>{len(users_all)}</b>\n\n"
+        )
+
+        report += f"<b>💦 Всего впрысков: {total}</b>\n\n"
 
         report += "🏆 <b>Топ действий за всё время:</b>\n"
         for action, num in all_counter.most_common(10):
@@ -844,6 +858,7 @@ async def show_analytics(update: Update, context: CallbackContext):
 
     except Exception as e:
         await update.message.reply_text(f"Ошибка в аналитике: {e}")
+
 
 
 def generate_activity_graph(file="analytics.csv", output="graph.png"):
