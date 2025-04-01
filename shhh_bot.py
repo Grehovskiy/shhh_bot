@@ -680,7 +680,7 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text(f"{story}")
 
     elif "о нас" in txt:
-        await update.message.reply_text("Мы не просто интим-магазин… мы воплощение ваших желаний 😘")
+        await update.message.reply_text("Мы – не просто магазин. Мы создаём пространство для ваших самых сокровенных желаний 😘")
 
     elif "мне повезёт" in txt:
         now = datetime.now()
@@ -755,8 +755,9 @@ async def text_handler(update: Update, context: CallbackContext) -> None:
         # ⏳ Таймер на 30 минут
         async def discount_timer(context: CallbackContext, chat_id, code):
             await asyncio.sleep(1800)
-            end_time = datetime.datetime.now().strftime('%d-%m-%Y %H:%M')
+            end_time = datetime.now().strftime('%d-%m-%Y %H:%M')
             context.user_data["active_discount"] = None
+            logger.info(f"Попытка отправить сообщение об аннулировании скидки для кода {code}")
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=f"❌ Скидка <code>{code}</code> аннулирована.\n🕑 {end_time}",
